@@ -4,7 +4,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::{io::Write, time::Duration};
+use std::{fs::File, time::Duration};
 
 #[allow(non_snake_case)]
 #[derive(Deserialize, Debug, PartialEq, Serialize)]
@@ -38,6 +38,8 @@ struct ReportDetailReply {
 
 #[derive(Deserialize, Debug, PartialEq, Serialize)]
 struct ReportReply {
+    // Don´t serialize
+    #[serde(skip_serializing)]
     report_time: u64,
     burning_hours: f32,
     device_errors: String,
@@ -71,6 +73,8 @@ struct ReportReply {
 
 #[derive(Deserialize, Debug, PartialEq, Serialize)]
 struct StatusReply {
+    // Don´t serialize
+    #[serde(skip_serializing)]
     device_id: String,
     device_status: u16,
     connection_status: u8,
@@ -92,14 +96,12 @@ struct JSONResponce {
 
 async fn send_request(path: &str, payload: String) -> Result<String, reqwest::Error> {
     let u = format!("http://{}:10000{}", IP_ADDRESS, path);
-    println!("URL: {}", u);
+    //println!("URL: {}", u);
 
-    println!("REQ: {}", payload);
-
-    // let u = Url::parse(&u)?;
+    //println!("REQ: {}", payload);
 
     let client = reqwest::Client::builder()
-        .user_agent("Python-urllib/3.9")
+        .user_agent("Rust/1.0")
         // Atag One is case sensitive
         .http1_title_case_headers()
         //.http1_only()
@@ -114,8 +116,8 @@ async fn send_request(path: &str, payload: String) -> Result<String, reqwest::Er
         .send()
         .await?;
 
-    println!("Status: {}", resp.status());
-    println!("Headers:\n{:#?}", resp.headers());
+    //println!("Status: {}", resp.status());
+    //println!("Headers:\n{:#?}", resp.headers());
 
     let res = resp.text().await?;
 
@@ -141,11 +143,8 @@ struct JSONMessage<'a> {
 }
 
 const MAC_ADDRESS: &str = "d8:61:62:00:00:00";
-//const IP_ADDRESS: &str = "192.168.2.1";
 const IP_ADDRESS: &str = "192.168.2.243";
-
 const READ_PATH: &str = "/retrieve";
-// const UPDATE_PATH: &str = "/update";
 
 // https://github.com/kozmoz/atag-one-api/wiki/Thermostat-Protocol
 // 01 = Control
@@ -172,10 +171,10 @@ const INFO_WFS: u8 = 0x20;
 const INFO_RPTDL: u8 = 0x40;
 
 #[tokio::main]
-async fn main() -> Result<(), reqwest::Error> {
+async fn main() -> Result<(), std::io::Error> {
     let mut req = JSONMessage {
         retrieve_message: RetrieveMessage {
-            seqnr: 1,
+            seqnr: 0,
             account_auth: AccountAuth {
                 user_account: "1",
                 mac_address: MAC_ADDRESS,
@@ -184,21 +183,27 @@ async fn main() -> Result<(), reqwest::Error> {
         },
     };
 
-    let mut f = std::fs::File::options()
-        .create(true)
-        .append(true)
-        .open("json.log")
-        .unwrap();
+    let f = File::options().create(true).append(true).open("json.csv")?;
+
+    //let mut wrt = csv::Writer::from_writer(f);
+    let mut wrt = csv::WriterBuilder::new().has_headers(false).from_writer(f);
 
     loop {
         req.retrieve_message.seqnr = req.retrieve_message.seqnr.wrapping_add(1);
-        let ret = send_request(READ_PATH, serde_json::to_string(&req).unwrap()).await?;
-        f.write_all(ret.as_bytes()).unwrap();
-        f.write_all("\n".as_bytes()).unwrap();
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        print!("Send: {}: ", req.retrieve_message.seqnr);
+        match send_request(READ_PATH, serde_json::to_string(&req).unwrap()).await {
+            Ok(responce) => match serde_json::from_str::<JSONResponce>(&responce) {
+                Ok(json) => {
+                    wrt.serialize(json)?;
+                    wrt.flush()?;
+                    println!("Ok");
+                }
+                Err(e) => println!("{e:?}"),
+            },
+            Err(e) => println!("{e:?}"),
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
